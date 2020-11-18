@@ -7,6 +7,10 @@ using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations;
 using Object = UnityEngine.Object;
 
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
 namespace Unity.HLODSystem.Streaming
 {
     public class AddressableHLODController : HLODControllerBase
@@ -14,14 +18,9 @@ namespace Unity.HLODSystem.Streaming
         [Serializable]
         public class ChildObject
         {
-            public GameObject GameObject;
-
-            public string Address;
-
-            public Transform Parent;
-            public Vector3 Position;
-            public Quaternion Rotation;
-            public Vector3 Scale;
+            public GameObject  gameObject;
+            public int         meshIndex;
+            public int[]       materialIndices;
         }
 
         [SerializeField]
@@ -36,10 +35,9 @@ namespace Unity.HLODSystem.Streaming
         class LoadInfo
         {
             public GameObject GameObject;
-            public AddressableLoadManager.Handle Handle;
+            public AddressableLoadManager.HandleBase[] Handles;
             public List<Action<GameObject>> Callbacks;
         }
-        
 
         private Dictionary<int, LoadInfo> m_createdHighObjects = new Dictionary<int, LoadInfo>();
         private Dictionary<int, LoadInfo> m_createdLowObjects = new Dictionary<int, LoadInfo>();
@@ -48,6 +46,13 @@ namespace Unity.HLODSystem.Streaming
         private int m_hlodLayerIndex;
 
         public event Action<GameObject> HighObjectCreated;
+
+        private Dictionary<string, int> m_Resources;
+
+        [SerializeField]
+        private List<string> m_ResourceAddresses;
+
+        public delegate string ResolveAddress(Object asset);
         
         public override void OnStart()
         {
@@ -69,46 +74,42 @@ namespace Unity.HLODSystem.Streaming
 
         public override void Install()
         {
-            
             for (int i = 0; i < m_highObjects.Count; ++i)
             {
-                if (string.IsNullOrEmpty(m_highObjects[i].Address) == false)
+                StripGameObject(m_highObjects[i].gameObject);
+                m_highObjects[i].gameObject.SetActive(false);
+            }
+
+            m_Resources = null;
+        }
+
+        public int AddHighObject(GameObject gameObject, ResolveAddress resolveAddress)
+        {
+            int id = m_highObjects.Count;
+
+            ChildObject obj = new ChildObject();
+            obj.gameObject = gameObject;
+
+            var meshFilter = gameObject.GetComponent<MeshFilter>();
+            if (meshFilter != null)
+            {
+                obj.meshIndex = AddResource(resolveAddress(meshFilter.sharedMesh));
+            }
+
+            var meshRenderer = gameObject.GetComponent<MeshRenderer>();
+            if (meshRenderer != null)
+            {
+                obj.materialIndices = new int[meshRenderer.sharedMaterials.Length];
+                for (var i = 0; i < obj.materialIndices.Length; i++)
                 {
-                    DestoryObject(m_highObjects[i].GameObject);
-                }
-                else if (m_highObjects[i].GameObject != null)
-                {
-                    m_highObjects[i].GameObject.SetActive(false);
+                    obj.materialIndices[i] = AddResource(resolveAddress(meshRenderer.sharedMaterials[i]));
                 }
             }
-        }
-
-        public int AddHighObject(string address, GameObject origin)
-        {
-            int id = m_highObjects.Count;
-
-            ChildObject obj = new ChildObject();
-            obj.GameObject = origin;
-            obj.Address = address;
-            obj.Parent = origin.transform.parent;
-            obj.Position = origin.transform.localPosition;
-            obj.Rotation = origin.transform.localRotation;
-            obj.Scale = origin.transform.localScale;
 
             m_highObjects.Add(obj);
             return id;
         }
-
-        public int AddHighObject(GameObject gameObject)
-        {
-            int id = m_highObjects.Count;
-
-            ChildObject obj = new ChildObject();
-            obj.GameObject = gameObject;
-
-            m_highObjects.Add(obj);
-            return id;
-        }
+        
         public int AddLowObject(string address)
         {
             int id = m_lowObjects.Count;
@@ -140,26 +141,13 @@ namespace Unity.HLODSystem.Streaming
             }
             else
             {
-                if (m_highObjects[id].GameObject != null)
-                {
-                    LoadInfo loadInfo = new LoadInfo();
-                    loadInfo.GameObject = m_highObjects[id].GameObject;
-                    ChangeLayersRecursively(loadInfo.GameObject.transform, m_hlodLayerIndex);
-                    loadDoneCallback?.Invoke(loadInfo.GameObject);
-                    m_createdHighObjects.Add(id, loadInfo);
-                }
-                else
-                {
-                    //high object's priority is always lowest.
-                    LoadInfo loadInfo = CreateLoadInfo(m_highObjects[id].Address, m_priority, distance,
-                        m_highObjects[id].Parent, m_highObjects[id].Position, m_highObjects[id].Rotation, m_highObjects[id].Scale);
-                    m_createdHighObjects.Add(id, loadInfo);
-                    
-                    loadInfo.Callbacks = new List<Action<GameObject>>();
-                    loadInfo.Callbacks.Add(loadDoneCallback);
-                    loadInfo.Callbacks.Add(o => { HighObjectCreated?.Invoke(o); });
-                }
+                //high object's priority is always lowest.
+                LoadInfo loadInfo = CreateLoadInfo(m_highObjects[id], m_priority, distance);
+                m_createdHighObjects.Add(id, loadInfo);
                 
+                loadInfo.Callbacks = new List<Action<GameObject>>();
+                loadInfo.Callbacks.Add(loadDoneCallback);
+                loadInfo.Callbacks.Add(o => { HighObjectCreated?.Invoke(o); });                
             }            
             
         }
@@ -188,7 +176,7 @@ namespace Unity.HLODSystem.Streaming
                 m_createdLowObjects.Add(id, loadInfo);
 
                 loadInfo.Callbacks = new List<Action<GameObject>>();
-                loadInfo.Callbacks.Add(loadDoneCallback);    
+                loadInfo.Callbacks.Add(loadDoneCallback);
             }
         }
 
@@ -197,19 +185,16 @@ namespace Unity.HLODSystem.Streaming
             if (m_createdHighObjects.ContainsKey(id) == false)
                 return;
             
-            if (string.IsNullOrEmpty(m_highObjects[id].Address) == true)
-            { 
-                m_createdHighObjects[id].GameObject.SetActive(false);
-            }
-            else
+            StripGameObject(m_createdHighObjects[id].GameObject);
+            m_createdHighObjects[id].GameObject.SetActive(false);
+            LoadInfo info = m_createdHighObjects[id];
+            for (int i = 0; i < info.Handles.Length; i ++)
             {
-                LoadInfo info = m_createdHighObjects[id];
-                DestoryObject(info.GameObject);
-                AddressableLoadManager.Instance.UnloadAsset(info.Handle);
+                AddressableLoadManager.Instance.UnloadAsset(info.Handles[i]);    
             }
-
             m_createdHighObjects.Remove(id);
         }
+
         public override void ReleaseLowObject(int id)
         {
             if (m_createdLowObjects.ContainsKey(id) == false)
@@ -219,7 +204,10 @@ namespace Unity.HLODSystem.Streaming
             m_createdLowObjects.Remove(id);
             
             DestoryObject(info.GameObject);
-            AddressableLoadManager.Instance.UnloadAsset(info.Handle);
+            for (int i = 0; i < info.Handles.Length; i ++)
+            {
+                AddressableLoadManager.Instance.UnloadAsset(info.Handles[i]);    
+            }
         }
 
         private void DestoryObject(Object obj)
@@ -231,33 +219,110 @@ namespace Unity.HLODSystem.Streaming
 #endif
         }
         
+        // For high objects
+        private LoadInfo CreateLoadInfo(ChildObject childObj, int priority, float distance)
+        {
+            var meshAddr = GetMeshAddressForHighObject(childObj);
+            var matAddrs = GetMaterialAddressesForHighObject(childObj);
+
+            LoadInfo loadInfo = new LoadInfo();
+            loadInfo.Handles = new AddressableLoadManager.HandleBase[2];
+            loadInfo.Handles[0] = AddressableLoadManager.Instance.LoadAsset<Mesh>(this, meshAddr, priority, distance);
+            loadInfo.Handles[1] = AddressableLoadManager.Instance.LoadAssets<Material>(this, matAddrs, priority, distance);
+
+            loadInfo.Handles[0].Completed += handle =>
+            {
+                if (handle.Status == AsyncOperationStatus.Failed)
+                {
+                    Debug.LogError("Failed to load assets: " + meshAddr);
+                    return;
+                }
+                var assets = (handle as AddressableLoadManager.Handle<Mesh>).Result;
+                var gameObject = childObj.gameObject;
+
+                var meshFilter = gameObject.GetComponent<MeshFilter>();
+                if (meshFilter != null)
+                {
+                    meshFilter.sharedMesh = assets[0];
+                }
+
+                CheckLoadComplete(loadInfo, gameObject);
+            };
+
+            loadInfo.Handles[1].Completed += handle =>
+            {
+                if (handle.Status == AsyncOperationStatus.Failed)
+                {
+                    Debug.LogError("Failed to load assets: " + String.Join(",", matAddrs));
+                    return;
+                }
+                var assets = (handle as AddressableLoadManager.Handle<Material>).Result;;
+                var gameObject = childObj.gameObject;
+                var materials = new Material[assets.Count];
+                for (var i = 0; i < assets.Count; i++)
+                {
+                    materials[i] = assets[i] as Material;
+                }
+                var meshRenderer = gameObject.GetComponent<MeshRenderer>();
+                if (meshRenderer != null)
+                {
+                    meshRenderer.sharedMaterials = materials;
+                }
+
+                CheckLoadComplete(loadInfo, gameObject);
+            };            
+            return loadInfo;
+        }
+
+        // For low objects
         private LoadInfo CreateLoadInfo(string address, int priority, float distance, Transform parent, Vector3 localPosition, Quaternion localRotation, Vector3 localScale)
         {
             LoadInfo loadInfo = new LoadInfo();
-            loadInfo.Handle = AddressableLoadManager.Instance.LoadAsset(this, address, priority, distance);
-            loadInfo.Handle.Completed += handle =>
+            loadInfo.Handles = new AddressableLoadManager.HandleBase[1];
+            loadInfo.Handles[0] = AddressableLoadManager.Instance.LoadAsset<GameObject>(this, address, priority, distance);
+
+            loadInfo.Handles[0].Completed += handle =>
             {
-                if (loadInfo.Handle.Status == AsyncOperationStatus.Failed)
+                if (handle.Status == AsyncOperationStatus.Failed)
                 {
                     Debug.LogError("Failed to load asset: " + address);
                     return;
                 }
    
-                GameObject gameObject = Instantiate(handle.Result, parent, false);
+                GameObject gameObject = Instantiate((handle as AddressableLoadManager.Handle<GameObject>).Result[0], parent, false);
                 gameObject.transform.localPosition = localPosition;
                 gameObject.transform.localRotation = localRotation;
                 gameObject.transform.localScale = localScale;
-                gameObject.SetActive(false);
-                ChangeLayersRecursively(gameObject.transform, m_hlodLayerIndex);
-                loadInfo.GameObject = gameObject;
-                
-                for (int i = 0; i < loadInfo.Callbacks.Count; ++i)
-                {
-                    loadInfo.Callbacks[i]?.Invoke(gameObject);
-                }
-                loadInfo.Callbacks.Clear();
+
+                CheckLoadComplete(loadInfo, gameObject);
             };
             return loadInfo;
+        }
+
+        void CheckLoadComplete(LoadInfo info, GameObject gameObject)
+        {
+            if (info.GameObject != null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < info.Handles.Length; ++i)
+            {
+                if (info.Handles[i].Status != AsyncOperationStatus.Succeeded)
+                {
+                    return;
+                }
+            }
+
+            gameObject.SetActive(false);
+            ChangeLayersRecursively(gameObject.transform, m_hlodLayerIndex);
+            info.GameObject = gameObject;
+                
+            for (int i = 0; i < info.Callbacks.Count; ++i)
+            {
+                info.Callbacks[i]?.Invoke(gameObject);
+            }
+            info.Callbacks.Clear();
         }
 
         static void ChangeLayersRecursively(Transform trans, int layer)
@@ -267,6 +332,68 @@ namespace Unity.HLODSystem.Streaming
             {
                 ChangeLayersRecursively(child, layer);
             }
+        }
+
+        static void StripGameObject(GameObject gameObject)
+        {
+            var meshFilter = gameObject.GetComponent<MeshFilter>();
+            if (meshFilter != null)
+            {
+                meshFilter.sharedMesh = null;
+            }
+
+            var meshRenderer = gameObject.GetComponent<MeshRenderer>();
+            if (meshRenderer != null)
+            {
+                meshRenderer.sharedMaterials = new Material[0];
+            }
+        }
+
+        public int AddResource(string address)
+        {
+            #if UNITY_EDITOR
+                if (m_Resources == null)
+                {
+                    m_Resources = new Dictionary<string, int>();
+                }
+
+                if (string.IsNullOrEmpty(address))
+                {
+                    return -1;
+                }
+
+                int id;
+                if (!m_Resources.TryGetValue(address, out id))
+                {
+                    id = m_Resources.Count;
+                    m_Resources.Add(address, id);
+
+                    if (m_ResourceAddresses == null)
+                    {
+                        m_ResourceAddresses = new List<string>();
+                    }
+                    m_ResourceAddresses.Add(address);
+                }
+
+                return (int)id;
+            #else
+                return -1;
+            #endif
+        }
+
+        public string GetMeshAddressForHighObject(ChildObject childObj)
+        {
+            return m_ResourceAddresses[childObj.meshIndex];
+        }
+
+        public string[] GetMaterialAddressesForHighObject(ChildObject childObj)
+        {
+            string[] addresses = new string[childObj.materialIndices.Length];
+            for (int i = 0; i < addresses.Length; i++)
+            {
+                addresses[i] = m_ResourceAddresses[childObj.materialIndices[i]];
+            }
+            return addresses;
         }
     }
 

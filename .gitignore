@@ -7,3 +7,5 @@ upm-ci~/
 .bin/
 .download/
 com.unity.hlod/.npmignore
+.DS_Store
+com.unity.hlod/Samples~/*

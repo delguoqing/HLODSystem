@@ -99,7 +99,7 @@ namespace Unity.HLODSystem.Streaming
                 
                 for (int i = 0; i < infos.Count; ++i)
                 {
-                    data.AddFromWokringObjects(infos[i].Name, infos[i].WorkingObjects);
+                    data.AddFromWorkingObjects(infos[i].Name, infos[i].WorkingObjects);
                     data.AddFromWorkingColliders(infos[i].Name, infos[i].Colliders);
                     if (onProgress != null)
                         onProgress((float) i / (float) infos.Count);

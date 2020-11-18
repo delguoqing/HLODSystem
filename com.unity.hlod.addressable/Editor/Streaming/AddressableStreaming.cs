@@ -121,7 +121,7 @@ namespace Unity.HLODSystem.Streaming
                 }
 
                 HLODData data = hlodDatas[infos[i].ParentIndex];
-                data.AddFromWokringObjects(infos[i].Name, infos[i].WorkingObjects);
+                data.AddFromWorkingObjects(infos[i].Name, infos[i].WorkingObjects);
                 data.AddFromWorkingColliders(infos[i].Name, infos[i].Colliders);
 
                 if (writeNoPrefab)
@@ -189,51 +189,19 @@ namespace Unity.HLODSystem.Streaming
                     int highId = -1;
                     GameObject obj = spaceNode.Objects[oi];
 
-                    if (PrefabUtility.IsPartOfAnyPrefab(obj) == false)
-                    {
-
-
-                        GameObject rootGameObject = null;
-                        
-                        if ( rootDatas.ContainsKey(i))
-                            rootGameObject = rootDatas[i].GetRootObject(obj.name);
-
-                        if (rootGameObject != null)
+                    highId = addressableController.AddHighObject(
+                        spaceNode.Objects[oi],
+                        asset => 
                         {
-                            GameObject go = PrefabUtility.InstantiatePrefab(rootGameObject) as GameObject;
-                            go.transform.SetParent(obj.transform.parent);
-                            go.transform.localPosition = obj.transform.localPosition;
-                            go.transform.localRotation = obj.transform.localRotation;
-                            go.transform.localScale = obj.transform.localScale;
-
-                            if (m_manager.IsGeneratedResource(obj))
-                                m_manager.AddGeneratedResource(go);
-                            else
-                                m_manager.AddConvertedPrefabResource(go);
-
-                            spaceNode.Objects.Add(go);
-
-                            Object.DestroyImmediate(obj);
-                            continue;
+                            var addr = GetAddress(asset);
+                            if (!string.IsNullOrEmpty(addr))
+                            {
+                                return addr;
+                            }
+                            AddAddress(settings, group, asset);
+                            return GetAddress(asset);
                         }
-                    }
-
-                    var address = GetAddress(spaceNode.Objects[oi]);
-                    if (string.IsNullOrEmpty(address) && PrefabUtility.IsAnyPrefabInstanceRoot(spaceNode.Objects[oi]))
-                    {
-                        AddAddress(settings, group, spaceNode.Objects[oi]);
-                        address = GetAddress(spaceNode.Objects[oi]);
-                    }
-                    
-                    if (address != null)
-                    {
-                        highId = addressableController.AddHighObject(address, spaceNode.Objects[oi]);
-                    }
-                    else
-                    {
-                        highId = addressableController.AddHighObject(spaceNode.Objects[oi]);
-                    }
-                    
+                    );
                     hlodTreeNode.HighObjectIds.Add(highId);
                 }
 
@@ -510,7 +478,11 @@ namespace Unity.HLODSystem.Streaming
         {
             
             string path = GetAssetPath(obj);
-            
+            AddAddress(settings, group, path);
+        }
+
+        private void AddAddress(AddressableAssetSettings settings, AddressableAssetGroup group, string path)
+        {
             if (string.IsNullOrEmpty(path))
                 return;
 
@@ -538,8 +510,6 @@ namespace Unity.HLODSystem.Streaming
 
             string guid = AssetDatabase.AssetPathToGUID(path);
             entriesAdded.Add(settings.CreateOrMoveEntry(guid, group, false, false));
-            
-            
 
             settings.SetDirty(AddressableAssetSettings.ModificationEvent.EntryMoved, entriesAdded, true);
         }
@@ -568,6 +538,13 @@ namespace Unity.HLODSystem.Streaming
                     if (AssetDatabase.IsMainAsset(prefab) == false)
                     {
                         address = address + "[" + prefab.name + "]";
+                    }
+                }
+                else
+                {
+                    if (!AssetDatabase.IsMainAsset(obj))
+                    {
+                        address = address + "[" + obj.name + "]";
                     }
                 }
 

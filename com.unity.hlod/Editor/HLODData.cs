@@ -559,7 +559,7 @@ namespace Unity.HLODSystem
         [SerializeField] private List<SerializableMaterial> m_materials = new List<SerializableMaterial>();
         [SerializeField] private List<SerializableCollider> m_colliders = new List<SerializableCollider>();
 
-        public void AddFromWokringObjects(string name, IList<WorkingObject> woList)
+        public void AddFromWorkingObjects(string name, IList<WorkingObject> woList)
         {
             for (int i = 0; i < woList.Count; ++i)
             {
