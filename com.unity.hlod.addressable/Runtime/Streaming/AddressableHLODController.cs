@@ -222,55 +222,109 @@ namespace Unity.HLODSystem.Streaming
         // For high objects
         private LoadInfo CreateLoadInfo(ChildObject childObj, int priority, float distance)
         {
+            // mesh
             var meshAddr = GetMeshAddressForHighObject(childObj);
+            var needReplaceMesh = !string.IsNullOrEmpty(meshAddr);
+
+            // material
             var matAddrs = GetMaterialAddressesForHighObject(childObj);
+            var needReplaceMaterial = false;
+            string[] nonNullMatAddrs = null;
+            var nonNullMatCount = 0;
+            for (var i = 0; i < matAddrs.Length; i++) {
+                if (!string.IsNullOrEmpty(matAddrs[i])) {
+                    nonNullMatCount ++;
+                }
+            }
+            if (nonNullMatCount == matAddrs.Length) {
+                nonNullMatAddrs = matAddrs;
+            } else {
+                nonNullMatAddrs = new string[nonNullMatCount];
+                int j = 0;
+                for (var i = 0; i < matAddrs.Length; i++) {
+                    if (!string.IsNullOrEmpty(matAddrs[i])) {
+                        nonNullMatAddrs[j ++] = matAddrs[i];
+                    }
+                }
+            }
+            needReplaceMaterial = (nonNullMatCount > 0);
+
+            // total count
+            var handleCount = 0;
+            if (needReplaceMesh) {
+                handleCount ++;
+            }
+            if (needReplaceMaterial) {
+                handleCount ++;
+            }
 
             LoadInfo loadInfo = new LoadInfo();
-            loadInfo.Handles = new AddressableLoadManager.HandleBase[2];
-            loadInfo.Handles[0] = AddressableLoadManager.Instance.LoadAsset<Mesh>(this, meshAddr, priority, distance);
-            loadInfo.Handles[1] = AddressableLoadManager.Instance.LoadAssets<Material>(this, matAddrs, priority, distance);
+            loadInfo.Handles = new AddressableLoadManager.HandleBase[handleCount];
+            int handleIndex = 0;
 
-            loadInfo.Handles[0].Completed += handle =>
-            {
-                if (handle.Status == AsyncOperationStatus.Failed)
+            // load mesh
+            if (needReplaceMesh) {
+                loadInfo.Handles[handleIndex] = AddressableLoadManager.Instance.LoadAsset<Mesh>(this, meshAddr, priority, distance);    
+                loadInfo.Handles[handleIndex].Completed += handle =>
                 {
-                    Debug.LogError("Failed to load assets: " + meshAddr);
-                    return;
-                }
-                var assets = (handle as AddressableLoadManager.Handle<Mesh>).Result;
-                var gameObject = childObj.gameObject;
+                    if (handle.Status == AsyncOperationStatus.Failed)
+                    {
+                        Debug.LogError("Failed to load assets: " + meshAddr);
+                        return;
+                    }
+                    var assets = (handle as AddressableLoadManager.Handle<Mesh>).Result;
+                    var gameObject = childObj.gameObject;
 
-                var meshFilter = gameObject.GetComponent<MeshFilter>();
-                if (meshFilter != null)
+                    var meshFilter = gameObject.GetComponent<MeshFilter>();
+                    if (meshFilter != null)
+                    {
+                        meshFilter.sharedMesh = assets[0];
+                    }
+
+                    CheckLoadComplete(loadInfo, gameObject);
+                };
+                ++ handleIndex;
+            }
+
+            // load materials
+            if (needReplaceMaterial) {
+                loadInfo.Handles[handleIndex] = AddressableLoadManager.Instance.LoadAssets<Material>(this, nonNullMatAddrs, priority, distance);
+                loadInfo.Handles[handleIndex].Completed += handle =>
                 {
-                    meshFilter.sharedMesh = assets[0];
-                }
+                    if (handle.Status == AsyncOperationStatus.Failed)
+                    {
+                        Debug.LogError("Failed to load assets: " + String.Join(",", nonNullMatAddrs));
+                        return;
+                    }
+                    var assets = (handle as AddressableLoadManager.Handle<Material>).Result;;
+                    var gameObject = childObj.gameObject;
+                    var materials = new Material[matAddrs.Length];
+                    int j = 0;
+                    for (int i = 0; i < matAddrs.Length; i++) {
+                        if (!string.IsNullOrEmpty(matAddrs[i])) {
+                            // WTF?
+                            materials[i] = (j >= assets.Count) ? assets[assets.Count - 1] : assets[j ++];
+                        } else {
+                            materials[i] = null;
+                        }
+                    }
 
+                    var meshRenderer = gameObject.GetComponent<MeshRenderer>();
+                    if (meshRenderer != null)
+                    {
+                        meshRenderer.sharedMaterials = materials;
+                    }
+
+                    CheckLoadComplete(loadInfo, gameObject);
+                };                  
+                handleIndex ++;
+            }
+
+            // nothing to do
+            if (handleCount == 0) {
                 CheckLoadComplete(loadInfo, gameObject);
-            };
-
-            loadInfo.Handles[1].Completed += handle =>
-            {
-                if (handle.Status == AsyncOperationStatus.Failed)
-                {
-                    Debug.LogError("Failed to load assets: " + String.Join(",", matAddrs));
-                    return;
-                }
-                var assets = (handle as AddressableLoadManager.Handle<Material>).Result;;
-                var gameObject = childObj.gameObject;
-                var materials = new Material[assets.Count];
-                for (var i = 0; i < assets.Count; i++)
-                {
-                    materials[i] = assets[i] as Material;
-                }
-                var meshRenderer = gameObject.GetComponent<MeshRenderer>();
-                if (meshRenderer != null)
-                {
-                    meshRenderer.sharedMaterials = materials;
-                }
-
-                CheckLoadComplete(loadInfo, gameObject);
-            };            
+            }
+          
             return loadInfo;
         }
 
@@ -383,15 +437,20 @@ namespace Unity.HLODSystem.Streaming
 
         public string GetMeshAddressForHighObject(ChildObject childObj)
         {
+            if (childObj.meshIndex == -1) {
+                return "";
+            }
             return m_ResourceAddresses[childObj.meshIndex];
         }
 
-        public string[] GetMaterialAddressesForHighObject(ChildObject childObj)
-        {
+        public string[] GetMaterialAddressesForHighObject(ChildObject childObj) {
             string[] addresses = new string[childObj.materialIndices.Length];
-            for (int i = 0; i < addresses.Length; i++)
-            {
-                addresses[i] = m_ResourceAddresses[childObj.materialIndices[i]];
+            for (int i = 0; i < addresses.Length; i++) {
+                if (childObj.materialIndices[i] == -1) {
+                    addresses[i] = "";
+                } else {
+                    addresses[i] = m_ResourceAddresses[childObj.materialIndices[i]];
+                }
             }
             return addresses;
         }

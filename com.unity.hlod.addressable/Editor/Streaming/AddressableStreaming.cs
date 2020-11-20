@@ -193,9 +193,17 @@ namespace Unity.HLODSystem.Streaming
                         spaceNode.Objects[oi],
                         asset => 
                         {
+                            if (asset == null) {
+                                return "";
+                            }
+
+                            var assetPath = GetAssetPath(asset);
+                            if (assetPath == "Library/unity default resources") {
+                                return "";
+                            }
+
                             var addr = GetAddress(asset);
-                            if (!string.IsNullOrEmpty(addr))
-                            {
+                            if (!string.IsNullOrEmpty(addr)) {
                                 return addr;
                             }
                             AddAddress(settings, group, asset);

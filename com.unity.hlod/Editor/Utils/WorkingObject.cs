@@ -73,7 +73,10 @@ namespace Unity.HLODSystem.Utils
 
             foreach (var mat in renderer.sharedMaterials)
             {
-                m_materials.Add(mat.ToWorkingMaterial(m_allocator));
+                if (mat != null)
+                {
+                    m_materials.Add(mat.ToWorkingMaterial(m_allocator));
+                }
             }
 
             m_localToWorld = renderer.localToWorldMatrix;
